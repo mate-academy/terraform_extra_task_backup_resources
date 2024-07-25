@@ -1,0 +1,124 @@
+name: Terraform Validate
+
+run-name: ${{ github.actor }} - ${{ github.ref_name }}
+
+on:
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+  issues: write
+
+env:
+  ARM_CLIENT_ID: "${{ secrets.AZURE_CLIENT_ID }}"
+  ARM_SUBSCRIPTION_ID: "${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+  ARM_TENANT_ID: "${{ secrets.AZURE_TENANT_ID }}"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+
+    - name: Check Required Files
+      run: |
+        required_files=("main.tf" "VM.tf" "FileShare.tf" "provider.tf" "variables.tf" "terraform.tfvars")
+        for file in "${required_files[@]}"; do
+          if [ ! -f "$file" ]; then
+            echo "Error: $file is missing"
+            exit 1
+          fi
+        done
+        echo "All required files are present."
+
+    - name: Check VM Backup Configuration
+      run: |
+        if ! grep -q 'azurerm_resource_group.*"rg1"' VM.tf; then
+          echo "Error: Resource group for VM backup is not defined in VM.tf"
+          exit 1
+        fi
+        if ! grep -q 'azurerm_recovery_services_vault.*"rsv1"' VM.tf; then
+          echo "Error: Recovery Services Vault for VM backup is not defined in VM.tf"
+          exit 1
+        fi
+        if ! grep -q 'azurerm_backup_policy_vm' VM.tf; then
+          echo "Error: VM Backup Policy is not defined in VM.tf"
+          exit 1
+        fi
+        echo "VM Backup configuration is correct."
+
+    - name: Check File Share Backup Configuration
+      run: |
+        if ! grep -q 'azurerm_resource_group.*"rg2"' FileShare.tf; then
+          echo "Error: Resource group for File Share backup is not defined in FileShare.tf"
+          exit 1
+        fi
+        if ! grep -q 'azurerm_recovery_services_vault.*"rsv2"' FileShare.tf; then
+          echo "Error: Recovery Services Vault for File Share backup is not defined in FileShare.tf"
+          exit 1
+        fi
+        if ! grep -q 'azurerm_storage_account' FileShare.tf; then
+          echo "Error: Storage Account is not defined in FileShare.tf"
+          exit 1
+        fi
+        if ! grep -q 'azurerm_storage_share' FileShare.tf; then
+          echo "Error: Storage Share is not defined in FileShare.tf"
+          exit 1
+        fi
+        if ! grep -q 'azurerm_backup_container_storage_account' FileShare.tf; then
+          echo "Error: Backup Container for Storage Account is not defined in FileShare.tf"
+          exit 1
+        fi
+        if ! grep -q 'azurerm_backup_policy_file_share' FileShare.tf; then
+          echo "Error: File Share Backup Policy is not defined in FileShare.tf"
+          exit 1
+        fi
+        echo "File Share Backup configuration is correct."
+
+    - name: Check Provider Configuration
+      run: |
+        if ! grep -q 'provider.*"azurerm"' provider.tf; then
+          echo "Error: Azure provider is not defined in provider.tf"
+          exit 1
+        fi
+        if ! grep -q 'provider.*"random"' provider.tf; then
+          echo "Error: Random provider is not defined in provider.tf"
+          exit 1
+        fi
+        echo "Provider configuration is correct."
+
+    - name: Check Variables and Terraform.tfvars
+      run: |
+        if ! grep -q 'variable.*"location"' variables.tf; then
+          echo "Error: location variable is not defined in variables.tf"
+          exit 1
+        fi
+        if ! grep -q 'location.*=.*"uksouth"' terraform.tfvars; then
+          echo "Error: location is not set to 'uksouth' in terraform.tfvars"
+          exit 1
+        fi
+        echo "Variables and terraform.tfvars are correctly defined."
+
+    - name: Check for Random Resource Names
+      run: |
+        if ! grep -q 'random_id' VM.tf FileShare.tf; then
+          echo "Error: random_id resource is missing for generating unique names"
+          exit 1
+        fi
+        echo "Random resource name generation is configured."
+
+    - name: Terraform Fmt
+      run: terraform fmt -check -recursive -diff
+    
+    - name: Terraform Init
+      run: terraform init -backend=false
+  
+    - name: Terraform Validate
+      run: terraform validate
